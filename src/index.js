@@ -5,6 +5,7 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import "./index.css";
+import PropTypes from "prop-types";
 
 ////////////////////////////
 //    Validate action     //
@@ -25,11 +26,13 @@ const createStore = reducer => {
     dispatch: action => {
       validateAction(action);
       state = reducer(state, action);
+      //calls the render function!
       subscribers.forEach(handler => handler());
     },
     getState: () => state,
     subscribe: handler => {
       subscribers.push(handler);
+      //returns a function that unsubscribes
       return () => {
         const index = subscribers.indexOf(handler);
         if (index > 0) {
@@ -42,12 +45,78 @@ const createStore = reducer => {
   return store;
 };
 
+////////////////////////////////////////////////
+//            Provider                        //
+////////////////////////////////////////////////
+class Provider extends React.Component {
+  getChildContext() {
+    return {
+      store: this.props.store
+    };
+  }
+  render() {
+    return this.props.children;
+  }
+}
+
+Provider.childContextTypes = {
+  store: PropTypes.object
+};
+
+////////////////////////////////////////////////
+//            connect
+//     this function converts context back into props
+////////////////////////////////////////////////
+const connect = (
+  mapStateToProps = () => ({}),
+  mapDispatchToProps = () => ({})
+) => Component => {
+  class Connected extends React.Component {
+    onStoreOrPropsChange(props) {
+      const { store } = this.context;
+      const state = store.getState();
+      const stateProps = mapStateToProps(state);
+      console.log("in connected - stateProps:  ", stateProps);
+      console.log("in connected - props:  ", props);
+      const dispatchProps = mapDispatchToProps(store.dispatch);
+      this.setState({
+        ...stateProps,
+        ...dispatchProps
+      });
+    }
+    componentWillMount() {
+      const { store } = this.context;
+      this.onStoreOrPropsChange(this.props);
+      this.unsubscribe = store.subscribe(() =>
+        this.onStoreOrPropsChange(this.props)
+      );
+    }
+    componentWillReceiveProps(nextProps) {
+      this.onStoreOrPropsChange(nextProps);
+    }
+    componentWillUnmount() {
+      this.unsubscribe();
+    }
+    render() {
+      return <Component {...this.props} {...this.state} />;
+    }
+  }
+
+  Connected.contextTypes = {
+    store: PropTypes.object
+  };
+
+  return Connected;
+};
+
 //////////////////////
 // Our action types //
 //////////////////////
 
 const CREATE_NOTE = "CREATE_NOTE";
 const UPDATE_NOTE = "UPDATE_NOTE";
+const OPEN_NOTE = "OPEN_NOTE";
+const CLOSE_NOTE = "CLOSE_NOTE";
 
 /////////////////
 // Our reducer //
@@ -55,7 +124,8 @@ const UPDATE_NOTE = "UPDATE_NOTE";
 
 const initialState = {
   nextNoteId: 1,
-  notes: {}
+  notes: {},
+  openNoteId: null
 };
 
 const reducer = (state = initialState, action) => {
@@ -69,6 +139,7 @@ const reducer = (state = initialState, action) => {
       return {
         ...state,
         nextNoteId: id + 1,
+        openNoteId: id,
         notes: {
           ...state.notes,
           [id]: newNote
@@ -76,6 +147,7 @@ const reducer = (state = initialState, action) => {
       };
     }
     case UPDATE_NOTE: {
+      // console.log("UPDATE_NOTE reducer running");
       const { id, content } = action;
       const editedNote = {
         ...state.notes[id],
@@ -89,6 +161,18 @@ const reducer = (state = initialState, action) => {
         }
       };
     }
+    case OPEN_NOTE: {
+      return {
+        ...state,
+        openNoteId: action.id
+      };
+    }
+    case CLOSE_NOTE: {
+      return {
+        ...state,
+        openNoteId: null
+      };
+    }
     default:
       return state;
   }
@@ -98,29 +182,6 @@ const reducer = (state = initialState, action) => {
 //   Our Store     //
 /////////////////////
 const store = createStore(reducer);
-
-///////////////////////////////////////////////
-// Render our app whenever the store changes //
-///////////////////////////////////////////////
-store.subscribe(() => {
-  ReactDOM.render(
-    <pre>{JSON.stringify(store.getState(), null, 2)}</pre>,
-    document.getElementById("root")
-  );
-});
-
-//////////////////////
-// Dispatch actions //
-//////////////////////
-store.dispatch({
-  type: CREATE_NOTE
-});
-
-store.dispatch({
-  type: UPDATE_NOTE,
-  id: 1,
-  content: "WE DOIN IT LIVE BOI"
-});
 
 ////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
@@ -195,3 +256,67 @@ const NoteApp = ({
     )}
   </div>
 );
+
+// why does this only have one parameter when
+// where it's being called has two?
+// "takes the current state from out store and returns some props"
+const mapStateToProps = state => {
+  console.log("mapStateToProps - arguments:  ", arguments);
+  return {
+    notes: state.notes,
+    openNoteId: state.openNoteId
+  };
+};
+
+//"takes the dispatch method of our store and returns some more props
+//That gives us a new component, which will automatically get all those
+//mapped props (plus any extra ones we pass in)"
+const mapDispatchToProps = dispatch => ({
+  onAddNote: () =>
+    dispatch({
+      type: CREATE_NOTE
+    }),
+  onChangeNote: (id, content) =>
+    dispatch({
+      type: UPDATE_NOTE,
+      id,
+      content
+    }),
+  onOpenNote: id =>
+    dispatch({
+      type: OPEN_NOTE,
+      id
+    }),
+  onCloseNote: () =>
+    dispatch({
+      type: CLOSE_NOTE
+    })
+});
+
+const NoteAppContainer = connect(mapStateToProps, mapDispatchToProps)(NoteApp);
+
+////////////////////
+// Render our app //
+////////////////////
+
+ReactDOM.render(
+  <Provider store={store}>
+    <NoteAppContainer />
+  </Provider>,
+  document.getElementById("root")
+);
+
+//////////////////////
+// Prop Logger  (HOC)
+//////////////////////
+function logProps(WrappedComponent) {
+  return class extends React.Component {
+    componentWillReceiveProps(nextProps) {
+      console.log("Current Props:  ", this.props);
+      console.log("Next Props:  ", nextProps);
+    }
+    render() {
+      return <WrappedComponent {...this.props} />;
+    }
+  };
+}
